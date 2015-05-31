@@ -30,3 +30,4 @@ project/plugins/project/
 activator
 *.jar
 activator.bat
+Sandbox.scala
