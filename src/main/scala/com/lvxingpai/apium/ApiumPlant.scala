@@ -4,6 +4,7 @@ import java.net.URLEncoder
 import java.util.UUID
 
 import akka.actor.{ActorRef, ActorSystem}
+import com.lvxingpai.apium.ApiumPlant.ConnectionParam
 import com.rabbitmq.client.ConnectionFactory
 import com.thenewmotion.akka.rabbitmq._
 
@@ -14,64 +15,58 @@ import scala.concurrent.duration._
  *
  * Created by zephyre on 5/27/15.
  */
-class ApiumPlant(val plantId: String, val host: String, val port: Int, val user: String, passwd: String,
-                 val virtualHost: String = "/") {
+class ApiumPlant(connParam: ConnectionParam, val apiumName:String, val pods: Seq[String] = Seq()) {
+
+  val plantId = UUID.randomUUID().toString
 
   implicit private val actorSystem = ActorSystem()
 
   private val connActor = {
     val factory = new ConnectionFactory()
-    val virtualHostEnc = URLEncoder.encode(virtualHost, "utf-8")
+    val virtualHostEnc = URLEncoder.encode(connParam.virtualHost, "utf-8")
+    val user = connParam.user
+    val passwd = connParam.passwd
+    val host = connParam.host
+    val port = connParam.port
     factory.setUri(s"amqp://$user:$passwd@$host:$port/$virtualHostEnc")
     actorSystem.actorOf(ConnectionActor.props(factory), "rabbitmq")
   }
 
-  def connect(ops: ApiumPlant.ConnectionOps = null): Unit = if (ops!=null)
-    connActor ! CreateChannel(ChannelActor.props(ops), Some("channelActor"))
-  else
-    connActor ! CreateChannel(ChannelActor.props(), Some("channelActor"))
+  {
+    // 构造连接RabbitMQ时需要声明的exchange
+    val entryExchangeOps = ApiumPlant.declareExchange(apiumName, ApiumPlant.EXCHANGE_DIRECT, durable = true)
+    val seedExchangeOps = pods flatMap (seedName => {
+      val name = s"$apiumName.$seedName"
+      val seedExchange = ApiumPlant.declareExchange(name, ApiumPlant.EXCHANGE_FANOUT, durable = true)
+      val bindSeed = ApiumPlant.bindExchange(name, apiumName, seedName)
+      Seq(seedExchange, bindSeed)
+    })
+
+    val ops = entryExchangeOps +: seedExchangeOps
+
+    // 建立连接
+    connActor ! CreateChannel(ChannelActor.props(ApiumPlant.mergeOps(ops: _*)), Some("channelActor"))
+  }
 
   /**
    * 向RabbitMQ发送一个ApiumSeed
    *
-   * @param exchange
-   * @param routingKey
+   * @param podName
    * @param seed
    */
-  def sendSeed(exchange: String, routingKey: String, seed: ApiumSeed): Unit =
-    sendMessage(exchange, routingKey, seed.toString)
-
-  /**
-   * 向RabbitMQ发送一条消息
-   *
-   * @param exchange
-   * @param routingKey
-   * @param message
-   */
-  def sendMessage(exchange: String, routingKey: String, message: String): Unit =
-    sendMessage(exchange, routingKey, message.getBytes("utf-8"))
-
-  /**
-   * 向RabbitMQ发送一条消息
-   *
-   * @param exchange
-   * @param routingKey
-   * @param body
-   */
-  def sendMessage(exchange: String, routingKey: String, body: Array[Byte]): Unit = {
+  def sendSeed(podName: String, seed: ApiumSeed): Unit = {
     val channelActor = actorSystem.actorSelection("/user/rabbitmq/channelActor")
 
-    channelActor ! ChannelMessage((channel: Channel) => channel.basicPublish(exchange, routingKey, null, body),
+    val body = seed.toString.getBytes("utf-8")
+
+    channelActor ! ChannelMessage((channel: Channel) => channel.basicPublish(apiumName, podName, null, body),
       dropIfNoChannel = false)
   }
 
   /**
    * 关闭ApiumPlant
    */
-  def shutdown(): Unit = {
-    actorSystem.awaitTermination(30 seconds)
-    ApiumPlant -= plantId
-  }
+  def shutdown(): Unit = actorSystem.awaitTermination(30 seconds)
 }
 
 object ApiumPlant {
@@ -93,13 +88,6 @@ object ApiumPlant {
    * @param plantID
    */
   def -=(plantID: String): Unit = removePlantByID(plantID)
-
-  /**
-   * 从ApiumPlant中去除某个plant
-   *
-   * @param plantID
-   */
-  def removePlantByID(plantID: String): Unit = plantMap -= plantID
 
   /**
    * Declare an exchange in RabbitMQ
@@ -153,10 +141,9 @@ object ApiumPlant {
   def mergeOps(ops: ConnectionOps*): ConnectionOps =
     (channel: Channel, self: ActorRef) => ops foreach (_(channel, self))
 
-  def apply(host: String, port: Int, user: String, passwd: String, virtualHost: String = "/"): ApiumPlant = {
-    val plantID = UUID.randomUUID().toString
-    val plant = new ApiumPlant(plantID, host, port, user, passwd, virtualHost)
-    ApiumPlant.plantMap(plantID) = plant
+  def apply(connParam: ConnectionParam, apiumName: String, pods: Seq[String] = Seq()): ApiumPlant = {
+    val plant = new ApiumPlant(connParam, apiumName, pods = pods)
+    ApiumPlant.plantMap(plant.plantId) = plant
     plant
   }
 
@@ -167,9 +154,18 @@ object ApiumPlant {
    */
   def shutdown(plantID: String): Unit = {
     val plant = ApiumPlant(plantID)
-    if (plant nonEmpty)
+    if (plant nonEmpty) {
       plant.get.shutdown()
+      ApiumPlant.removePlantByID(plantID)
+    }
   }
+
+  /**
+   * 从ApiumPlant中去除某个plant
+   *
+   * @param plantID
+   */
+  def removePlantByID(plantID: String): Unit = plantMap -= plantID
 
   /**
    * 根据PlantID获得一个ApiumPlant实例
@@ -186,4 +182,9 @@ object ApiumPlant {
    * @return
    */
   def getPlantByID(plantID: String): Option[ApiumPlant] = plantMap.get(plantID)
+
+  /**
+   * 连接参数
+   */
+  case class ConnectionParam(host: String, port: Int, user: String, passwd: String, virtualHost: String = "/")
 }
