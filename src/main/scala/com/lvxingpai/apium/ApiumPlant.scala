@@ -5,9 +5,11 @@ import java.util.UUID
 
 import akka.actor.{ActorRef, ActorSystem}
 import com.lvxingpai.apium.ApiumPlant.ConnectionParam
+import com.rabbitmq.client.AMQP.BasicProperties
 import com.rabbitmq.client.ConnectionFactory
 import com.thenewmotion.akka.rabbitmq._
 
+import scala.collection.JavaConversions._
 import scala.concurrent.duration._
 
 /**
@@ -15,7 +17,7 @@ import scala.concurrent.duration._
  *
  * Created by zephyre on 5/27/15.
  */
-class ApiumPlant(connParam: ConnectionParam, val apiumName:String, val pods: Seq[String] = Seq()) {
+class ApiumPlant(connParam: ConnectionParam, val apiumName: String, val pods: Seq[String] = Seq()) {
 
   val plantId = UUID.randomUUID().toString
 
@@ -35,10 +37,10 @@ class ApiumPlant(connParam: ConnectionParam, val apiumName:String, val pods: Seq
   {
     // 构造连接RabbitMQ时需要声明的exchange
     val entryExchangeOps = ApiumPlant.declareExchange(apiumName, ApiumPlant.EXCHANGE_DIRECT, durable = true)
-    val seedExchangeOps = pods flatMap (seedName => {
-      val name = s"$apiumName.$seedName"
+    val seedExchangeOps = pods flatMap (podName => {
+      val name = s"$apiumName.$podName"
       val seedExchange = ApiumPlant.declareExchange(name, ApiumPlant.EXCHANGE_FANOUT, durable = true)
-      val bindSeed = ApiumPlant.bindExchange(name, apiumName, seedName)
+      val bindSeed = ApiumPlant.bindExchange(name, apiumName, podName)
       Seq(seedExchange, bindSeed)
     })
 
@@ -49,18 +51,41 @@ class ApiumPlant(connParam: ConnectionParam, val apiumName:String, val pods: Seq
   }
 
   /**
+   * 根据podName，生成默认情况下的taskName
+   *
+   * @param podName
+   * @return
+   */
+  def defaultTaskName(podName: String): String = {
+    if (pods contains podName) {
+      val eventName = podName.capitalize
+      s"$apiumName.on$eventName"
+    } else throw new IllegalArgumentException(s"Pod name $podName does not exist.")
+  }
+
+  /**
    * 向RabbitMQ发送一个ApiumSeed
    *
    * @param podName
    * @param seed
    */
   def sendSeed(podName: String, seed: ApiumSeed): Unit = {
+    val builder = new BasicProperties.Builder()
+    builder.correlationId(seed.uuid)
+      .priority(0)
+      .deliveryMode(2)
+      .headers(Map[String, AnyRef]())
+      .contentEncoding("utf-8")
+      .contentType("application/json")
+
+    sendMessage(apiumName, seed.toString, props = builder.build(), routingKey = podName)
+  }
+
+  def sendMessage(exchange: String, message: String, props: BasicProperties = null, routingKey: String = ""): Unit = {
     val channelActor = actorSystem.actorSelection("/user/rabbitmq/channelActor")
 
-    val body = seed.toString.getBytes("utf-8")
-
-    channelActor ! ChannelMessage((channel: Channel) => channel.basicPublish(apiumName, podName, null, body),
-      dropIfNoChannel = false)
+    channelActor ! ChannelMessage((channel: Channel) => channel.basicPublish(exchange, routingKey, props,
+      message.getBytes("utf-8")), dropIfNoChannel = false)
   }
 
   /**
@@ -187,4 +212,5 @@ object ApiumPlant {
    * 连接参数
    */
   case class ConnectionParam(host: String, port: Int, user: String, passwd: String, virtualHost: String = "/")
+
 }

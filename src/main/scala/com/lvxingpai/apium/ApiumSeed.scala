@@ -12,21 +12,15 @@ import org.joda.time.{DateTime, DateTimeZone}
  *
  * Created by zephyre on 5/27/15.
  */
-case class ApiumSeed(node: ObjectNode) {
-  override def toString: String = {
-    val mapper = new ObjectMapper()
-    mapper.writeValueAsString(node)
-  }
-}
+case class ApiumSeed(task: String,
+                     args: Option[Seq[JsonNode]] = None,
+                     kwargs: Option[Map[String, JsonNode]] = None,
+                     expire: Option[DateTime] = None,
+                     eta: Option[DateTime] = None,
+                     timelimit: Option[(Float, Float)] = None) {
 
-object ApiumSeed {
-  def apply(task: String,
-            args: Option[Seq[JsonNode]] = None,
-            kwargs: Option[Map[String, JsonNode]] = None,
-            expire: Option[DateTime] = None,
-            eta: Option[DateTime] = None,
-            timelimit: Option[(Float, Float)] = None): ApiumSeed = {
-
+  val uuid = UUID.randomUUID().toString
+  private val node = {
     val mapper = new ObjectMapper()
     val node = mapper.createObjectNode()
 
@@ -34,8 +28,10 @@ object ApiumSeed {
 
     node.set("utc", BooleanNode.getTrue)
     node.put("task", task)
-    node.put("id", UUID.randomUUID().toString)
     node.put("retries", 0)
+
+    val uuid = UUID.randomUUID().toString
+    node.put("id", uuid)
 
     // 处理args
     val argsNode = mapper.createArrayNode()
@@ -67,7 +63,11 @@ object ApiumSeed {
 
     node.set("expires", dt2textNode(expire))
     node.set("eta", dt2textNode(eta))
+    node
+  }
 
-    new ApiumSeed(node)
+  override def toString: String = {
+    val mapper = new ObjectMapper()
+    mapper.writeValueAsString(node)
   }
 }
