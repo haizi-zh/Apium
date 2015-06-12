@@ -12,6 +12,8 @@ import com.thenewmotion.akka.rabbitmq._
 import scala.collection.JavaConversions._
 import scala.concurrent.duration._
 
+import scala.language.postfixOps
+
 /**
  * 基于akka库，对RabbitMQ的封装。可以异步地设置RabbitMQ，包括exchange，queue等。支持将一个Apium Seed投递到RabbitMQ队列中。
  *
