@@ -8,6 +8,7 @@ import com.lvxingpai.apium.ApiumPlant.ConnectionParam
 import com.rabbitmq.client.AMQP.BasicProperties
 import com.rabbitmq.client.ConnectionFactory
 import com.thenewmotion.akka.rabbitmq._
+import org.joda.time.DateTime
 
 import scala.collection.JavaConversions._
 import scala.concurrent.duration._
@@ -79,6 +80,7 @@ class ApiumPlant(connParam: ConnectionParam, val apiumName: String, val pods: Se
       .headers(Map[String, AnyRef]())
       .contentEncoding("utf-8")
       .contentType("application/json")
+      .expiration((seed.expire map (t => String.valueOf(t.getMillis - DateTime.now.getMillis))).orNull)
 
     sendMessage(apiumName, seed.toString, props = builder.build(), routingKey = podName)
   }
